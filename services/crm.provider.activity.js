@@ -5,27 +5,45 @@
   const BX = App.core.BX24;
   const log = App.log;
 
-  // ===== Helpers =====
   function safeStr(v) { return (v === null || v === undefined) ? "" : String(v); }
 
   function activityTs(a) {
-    // Bitrix costuma usar "YYYY-MM-DD HH:MM:SS"
     const dt = a.START_TIME || a.CREATED || a.LAST_UPDATED || a.END_TIME || "";
     return BX.parseDateToTs(dt);
   }
 
   function normalizeActivityPhone(a) {
-    // Nem sempre vem, então tentamos alguns campos comuns
-    const p =
+    const comm0 =
       a.COMMUNICATIONS && Array.isArray(a.COMMUNICATIONS) && a.COMMUNICATIONS[0]
-        ? (a.COMMUNICATIONS[0].VALUE || a.COMMUNICATIONS[0].VALUE_ORIGINAL || "")
-        : (a.PHONE_NUMBER || a.CALL_PHONE_NUMBER || a.CALL_FROM || a.CALL_TO || a.COMMUNICATION || "");
+        ? a.COMMUNICATIONS[0]
+        : null;
+
+    const p =
+      (comm0 && (comm0.VALUE_NORMALIZED || comm0.VALUE || comm0.VALUE_ORIGINAL)) ||
+      a.PHONE_NUMBER ||
+      a.CALL_PHONE_NUMBER ||
+      a.CALL_FROM ||
+      a.CALL_TO ||
+      a.COMMUNICATION ||
+      "";
 
     return BX.normalizePhone(p);
   }
 
+  function normalizeCallPhone(call) {
+    const p =
+      call.PHONE_NUMBER ||
+      call.CALL_PHONE_NUMBER ||
+      call.PHONE ||
+      call.CALLER_ID ||
+      call.CALL_FROM ||
+      call.CALL_TO ||
+      call.NUMBER ||
+      "";
+    return BX.normalizePhone(p);
+  }
+
   function directionFromActivity(a) {
-    // a.DIRECTION: 1=outgoing, 2=incoming (em geral)
     const d = parseInt(a.DIRECTION, 10) || 0;
     if (d === 1) return "OUTBOUND";
     if (d === 2) return "INBOUND";
@@ -42,8 +60,8 @@
   function extractDispositionFromDescription(desc) {
     const raw = safeStr(desc);
     const up = raw.toUpperCase();
-
     const list = App.config.DISPOSITIONS || [];
+
     for (const item of list) {
       const key = String(item).toUpperCase();
       if (key && up.includes(key)) {
@@ -53,21 +71,24 @@
     return { disposition: null, dispositionRaw: raw };
   }
 
-  // ===== API =====
-
-  async function getActivities(dateFromIso, dateToIso) {
-    // IMPORTANTE: crm.activity.list usa filtro por START_TIME normalmente.
-    // Se no seu portal os campos diferirem, a consulta ainda retorna, só que menos.
+  async function getActivities(dateFromIso, dateToIso, responsibleIds) {
     const filter = {
       ">=START_TIME": BX.isoToSpace(dateFromIso),
       "<=START_TIME": BX.isoToSpace(dateToIso),
       "TYPE_ID": 2 // CALL
     };
 
+    if (Array.isArray(responsibleIds) && responsibleIds.length === 1) {
+      filter["RESPONSIBLE_ID"] = String(responsibleIds[0]);
+    } else if (Array.isArray(responsibleIds) && responsibleIds.length > 1) {
+      filter["RESPONSIBLE_ID"] = responsibleIds.map(String);
+    }
+
     const select = [
       "ID",
       "TYPE_ID",
       "DIRECTION",
+      "RESPONSIBLE_ID",
       "START_TIME",
       "END_TIME",
       "CREATED",
@@ -76,9 +97,6 @@
       "OWNER_TYPE_ID",
       "OWNER_ID",
       "ASSOCIATED_ENTITY_ID",
-      "PROVIDER_ID",
-      "PROVIDER_TYPE_ID",
-      "PROVIDER_PARAMS",
       "COMMUNICATIONS"
     ];
 
@@ -92,29 +110,32 @@
   }
 
   function indexActivities(acts) {
-    // Index simples: phone -> lista ordenada por timestamp
     const map = new Map();
 
     for (const a of (acts || [])) {
+      const resp = safeStr(a.RESPONSIBLE_ID || "0");
       const phone = normalizeActivityPhone(a);
       if (!phone) continue;
 
       const t = activityTs(a);
+      if (!t) continue;
+
       const entry = {
         id: safeStr(a.ID),
         ts: t,
         phone,
+        resp,
         direction: directionFromActivity(a),
         ownerType: safeStr(a.OWNER_TYPE_ID),
         ownerId: safeStr(a.OWNER_ID),
         desc: safeStr(a.DESCRIPTION)
       };
 
-      if (!map.has(phone)) map.set(phone, []);
-      map.get(phone).push(entry);
+      const key = `${resp}|${phone}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(entry);
     }
 
-    // ordena por ts
     for (const [k, arr] of map.entries()) {
       arr.sort((x, y) => (x.ts || 0) - (y.ts || 0));
     }
@@ -123,22 +144,19 @@
   }
 
   function resolveForCall(call, actIndex, windowMs) {
-    const callStart = BX.parseDateToTs(call.CALL_START_DATE || call.CALL_START_DATE_FORMATTED || "");
-    const callPhone = BX.normalizePhone(
-      call.PHONE_NUMBER || call.CALL_PHONE_NUMBER || call.PHONE || call.CALL_FROM || call.CALL_TO || ""
-    );
+    const callStart = BX.parseDateToTs(call.CALL_START_DATE || call.CALL_START_DATE_FORMATTED || call.CALL_START_DATE_SHORT || "");
+    const phone = normalizeCallPhone(call);
+    const resp = call.PORTAL_USER_ID ? String(call.PORTAL_USER_ID) : "0";
     const callDir = directionFromCall(call);
 
-    if (!callStart || !callPhone) {
+    if (!callStart || !phone) {
       return { activityId: null, disposition: null, dispositionRaw: null };
     }
 
-    const bucket = actIndex && actIndex.get(callPhone) ? actIndex.get(callPhone) : [];
-    if (!bucket.length) {
-      return { activityId: null, disposition: null, dispositionRaw: null };
-    }
+    const key = `${resp}|${phone}`;
+    const bucket = actIndex && actIndex.get(key) ? actIndex.get(key) : [];
+    if (!bucket.length) return { activityId: null, disposition: null, dispositionRaw: null };
 
-    // pega candidatos na janela
     const from = callStart - windowMs;
     const to   = callStart + windowMs;
 
@@ -146,11 +164,8 @@
       .filter(a => a.ts >= from && a.ts <= to)
       .filter(a => (callDir === "UNKNOWN" || a.direction === "UNKNOWN" || a.direction === callDir));
 
-    if (!candidates.length) {
-      return { activityId: null, disposition: null, dispositionRaw: null };
-    }
+    if (!candidates.length) return { activityId: null, disposition: null, dispositionRaw: null };
 
-    // escolhe o mais próximo
     candidates.sort((a, b) => Math.abs(a.ts - callStart) - Math.abs(b.ts - callStart));
     const best = candidates[0];
 
@@ -163,15 +178,11 @@
       entityType: best.ownerType || null,
       entityId: best.ownerId || null,
       ambiguity: candidates.length > 1,
-      candidates: candidates.slice(0, 5).map(x => ({ id: x.id, ts: x.ts, dir: x.direction }))
+      candidates: candidates.slice(0, 5).map(x => ({ id: x.id, ts: x.ts, dir: x.direction, resp: x.resp }))
     };
   }
 
-  App.svc.ActivityProvider = {
-    getActivities,
-    indexActivities,
-    resolveForCall
-  };
+  App.svc.ActivityProvider = { getActivities, indexActivities, resolveForCall };
 
   log && log.info && log.info("✅ ActivityProvider carregado", { hasGetActivities: true });
 })(window);

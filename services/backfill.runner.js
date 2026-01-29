@@ -1,10 +1,3 @@
-/* =========================
- * services/backfill.runner.js (CORRIGIDO E COMPLETO)
- * - Evita buscar activities quando calls=0
- * - Throttle ajustado
- * - Retry leve por chunk em TIMEOUT (sem “matar” o job no primeiro timeout)
- * - Proteção extra contra “Script error.”: captura e continua no próximo chunk quando possível
- * ========================= */
 (function (global) {
   const App = global.App = global.App || {};
   const BX = App.core.BX24;
@@ -19,13 +12,14 @@
     throw new Error("TelephonyProvider não carregou (App.svc.TelephonyProvider.getCalls ausente).");
   }
   if (!Activity || typeof Activity.getActivities !== "function") {
-    throw new Error("ActivityProvider não carregou (App.svc.ActivityProvider.getActivities ausente). Verifique ../services/crm.provider.activity.js");
+    throw new Error("ActivityProvider não carregou (App.svc.ActivityProvider.getActivities ausente).");
   }
   if (!SPA || typeof SPA.upsertFromCall !== "function") {
     throw new Error("SpaProvider não carregou (App.svc.SpaProvider.upsertFromCall ausente).");
   }
 
-  App.state.backfill = App.state.backfill || { running:false, canceled:false };
+  App.state = App.state || {};
+  App.state.backfill = App.state.backfill || { running: false, canceled: false };
 
   function setButtons(running) {
     refs.btnStart.disabled = !!running;
@@ -48,8 +42,8 @@
 
     function ymd(d) {
       const yyyy = d.getFullYear();
-      const mm = String(d.getMonth()+1).padStart(2,'0');
-      const dd = String(d.getDate()).padStart(2,'0');
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
       return `${yyyy}-${mm}-${dd}`;
     }
 
@@ -62,7 +56,7 @@
       return { dateFromIso, dateToIso };
     }
 
-    const days = parseInt(preset.replace("d",""), 10) || 7;
+    const days = parseInt(preset.replace("d", ""), 10) || 7;
     const start = new Date(now);
     start.setDate(now.getDate() - (days - 1));
     const df = ymd(start);
@@ -70,37 +64,12 @@
     return BX.isoLocalStartEndFromDates(df, dt);
   }
 
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function isTimeoutErr(e) {
-    const m = (e && e.message) ? e.message : String(e || "");
-    return m === "TIMEOUT";
-  }
-
-  async function withRetry(fn, meta, maxRetries) {
-    const tries = Math.max(0, maxRetries || 0);
-    let attempt = 0;
-    while (true) {
-      try {
-        return await fn();
-      } catch (e) {
-        if (isTimeoutErr(e) && attempt < tries) {
-          attempt++;
-          log.warn("CHUNK_RETRY_TIMEOUT", { ...meta, attempt });
-          await sleep(700 * attempt);
-          continue;
-        }
-        throw e;
-      }
-    }
-  }
-
   async function start() {
     App.state.backfill.running = true;
     App.state.backfill.canceled = false;
     setButtons(true);
 
-    const counters = { total:0, done:0, created:0, updated:0, noact:0, amb:0, errors:0 };
+    const counters = { total: 0, done: 0, created: 0, updated: 0, noact: 0, amb: 0, errors: 0 };
 
     setStat("st-total", 0);
     setStat("st-created", 0);
@@ -135,36 +104,41 @@
 
         setProgress(
           Math.round((ci / Math.max(1, chunks.length)) * 100),
-          `Chunk ${ci+1}/${chunks.length} preparando...`
+          `Chunk ${ci + 1}/${chunks.length} preparando...`
         );
 
-        // Calls com retry (muito comum TIMEOUT no voximplant.statistic.get)
-        const calls = await withRetry(
-          () => Telephony.getCalls(ch.dateFrom, ch.dateTo),
-          { method: "voximplant.statistic.get", chunk: `${ci+1}/${chunks.length}` },
-          2
-        );
-
+        const calls = await Telephony.getCalls(ch.dateFrom, ch.dateTo);
         counters.total += calls.length;
         setStat("st-total", counters.total);
 
         if (!calls.length) {
-          log.info(`Chunk ${ci+1}/${chunks.length}: calls=0 (pulando activities)`);
-          log.info(`Chunk ${ci+1} concluído.`);
+          log.info(`Chunk ${ci + 1}/${chunks.length}: calls=0 (pulando activities)`);
+          log.info(`Chunk ${ci + 1} concluído.`);
           continue;
         }
 
-        // Activities com retry (também pode TIMEOUT)
-        const acts = await withRetry(
-          () => Activity.getActivities(ch.dateFrom, ch.dateTo),
-          { method: "crm.activity.list", chunk: `${ci+1}/${chunks.length}` },
-          1
-        );
+        // responsáveis presentes nas calls do chunk (igual BI trabalha)
+        const respIds = Array.from(new Set(
+          calls.map(c => c.PORTAL_USER_ID ? String(c.PORTAL_USER_ID) : null).filter(Boolean)
+        ));
 
-        const actIndex = Activity.indexActivities(acts);
+        // expande range pra não “perder” activity por alguns minutos
+        function shiftIso(iso, minutes) {
+          const d = new Date(iso);
+          d.setMinutes(d.getMinutes() + minutes);
+          return BX.nowIsoFromDate(d);
+        }
+
         const windowMs = Math.max(60_000, windowMin * 60_000);
+        const windowMinPad = Math.ceil(windowMs / 60000);
 
-        log.info(`Chunk ${ci+1}/${chunks.length}: calls=${calls.length}, activities=${acts.length}`);
+        const actFrom = shiftIso(ch.dateFrom, -windowMinPad);
+        const actTo   = shiftIso(ch.dateTo, +windowMinPad);
+
+        const acts = await Activity.getActivities(actFrom, actTo, respIds);
+        const actIndex = Activity.indexActivities(acts);
+
+        log.info(`Chunk ${ci + 1}/${chunks.length}: calls=${calls.length}, activities=${acts.length}`);
 
         for (let i = 0; i < calls.length; i++) {
           if (App.state.backfill.canceled) throw new Error("CANCELED");
@@ -184,7 +158,7 @@
           try {
             const r = await SPA.upsertFromCall(c, resolved);
             if (r.mode === "created") counters.created++;
-            else counters.updated++;
+            else if (r.mode === "updated") counters.updated++;
           } catch (e) {
             counters.errors++;
             log.error(`Falha upsert call=${callId}`, String(e && e.message ? e.message : e));
@@ -200,23 +174,21 @@
             setStat("st-errors", counters.errors);
 
             const pct = Math.round((counters.done / Math.max(1, counters.total)) * 100);
-            setProgress(pct, `Processando ${counters.done}/${counters.total} (chunk ${ci+1}/${chunks.length})`);
+            setProgress(pct, `Processando ${counters.done}/${counters.total} (chunk ${ci + 1}/${chunks.length})`);
           }
 
-          // throttle real (evita estourar rate limit e “Script error.”)
-          if (i % 10 === 0) await sleep(80);
+          if (i % 25 === 0) await new Promise(r => setTimeout(r, 50));
         }
 
-        log.info(`Chunk ${ci+1} concluído.`);
-        // respiro entre chunks
-        await sleep(120);
+        log.info(`Chunk ${ci + 1} concluído.`);
       }
 
       setProgress(100, "✅ Concluído.");
       log.info("✅ TAREFA CONCLUÍDA", counters);
 
-      alert(`✅ Concluído!\n\nChamadas: ${counters.total}\nCriados: ${counters.created}\nAtualizados: ${counters.updated}\nSem activity: ${counters.noact}\nAmbíguos: ${counters.amb}\nErros: ${counters.errors}`);
-
+      alert(
+        `✅ Concluído!\n\nChamadas: ${counters.total}\nCriados: ${counters.created}\nAtualizados: ${counters.updated}\nSem activity: ${counters.noact}\nAmbíguos: ${counters.amb}\nErros: ${counters.errors}`
+      );
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
       if (msg === "CANCELED") {

@@ -7,10 +7,14 @@
   <script>
     (function () {
       function redirectToApp() {
-        var base = window.location.href.split('#')[0].split('?')[0];
-        var idx  = base.lastIndexOf('/');
-        var root = base.substring(0, idx + 1);
-        window.location.replace(root + 'app/app.html');
+        var base = window.location.href.split('#')[0]; // NÃO remove query aqui
+        var pathOnly = base.split('?')[0];
+        var idx  = pathOnly.lastIndexOf('/');
+        var root = pathOnly.substring(0, idx + 1);
+
+        // Cache-bust sempre novo (Bitrix iframe cache é agressivo)
+        var v = Date.now();
+        window.location.replace(root + 'app/app.html?v=' + v);
       }
       redirectToApp();
     })();
