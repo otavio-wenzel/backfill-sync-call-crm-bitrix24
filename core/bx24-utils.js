@@ -7,9 +7,7 @@
       try {
         BX24.callMethod(method, params || {}, function (res) {
           try {
-            if (res && res.error && res.error()) {
-              return reject(new Error(res.error()));
-            }
+            if (res && res.error && res.error()) return reject(new Error(res.error()));
             resolve(res);
           } catch (cbErr) {
             reject(cbErr);
@@ -148,8 +146,7 @@
   }
 
   function nowIso() {
-    const d = new Date();
-    return nowIsoFromDate(d);
+    return nowIsoFromDate(new Date());
   }
 
   function nowIsoFromDate(d) {
@@ -179,10 +176,7 @@
       cEnd.setHours(23, 59, 59, 0);
       if (cEnd > end) cEnd.setTime(end.getTime());
 
-      out.push({
-        dateFrom: nowIsoFromDate(cStart),
-        dateTo: nowIsoFromDate(cEnd)
-      });
+      out.push({ dateFrom: nowIsoFromDate(cStart), dateTo: nowIsoFromDate(cEnd) });
 
       cur.setDate(cur.getDate() + step);
       cur.setHours(0, 0, 0, 0);

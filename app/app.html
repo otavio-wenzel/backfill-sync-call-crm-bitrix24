@@ -2,55 +2,33 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>Backfill - Call Analytics Unified</title>
+  <title>Backfill - Call Analytics (2 etapas)</title>
   <script src="//api.bitrix24.com/api/v1/" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="../ui/styles.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="app-header">
-      <div class="app-header-title">Backfill • Call Analytics - Unified (SPA)</div>
+      <div class="app-header-title">Backfill • Call Analytics (Vox → SPA • Activities → SPA)</div>
       <div class="app-header-user" id="header-user-info"></div>
     </header>
 
     <main class="main-content">
+
+      <!-- Tabs -->
       <section class="panel">
-        <h2>Operação</h2>
-
         <div class="tabs">
-          <button id="tab-vox" class="tab active" type="button">
-            1) Vox → SPA (criar/atualizar)
-          </button>
-          <button id="tab-act" class="tab" type="button">
-            2) Activity → SPA (relacionar/atualizar)
-          </button>
+          <button id="tab-vox" class="tab active">1) Vox → SPA</button>
+          <button id="tab-act" class="tab">2) Activities → SPA</button>
         </div>
-
-        <div class="tab-body" id="tab-body-vox">
-          <div class="desc">
-            Cria/atualiza SPAs a partir do Voximplant (idempotente por CALL_ID). Não relaciona Activity.
-          </div>
+        <div class="tab-hint">
+          Etapa 1 cria/atualiza SPAs por CALL_ID. Etapa 2 vincula Activities e atualiza SPAs já criados.
         </div>
+      </section>
 
-        <div class="tab-body hidden" id="tab-body-act">
-          <div class="desc">
-            Relaciona Activities de chamada (TYPE_ID=2) às SPAs existentes e atualiza campos (activity/disposition/entity).
-          </div>
-
-          <div class="form-row">
-            <label>
-              <input type="checkbox" id="act-only-missing" checked>
-              Processar apenas SPAs sem Activity
-            </label>
-
-            <label>
-              <input type="checkbox" id="act-force-relink">
-              Forçar relink (reprocessar mesmo com Activity)
-            </label>
-          </div>
-        </div>
-
-        <hr class="sep"/>
+      <!-- Shared filters -->
+      <section class="panel">
+        <h2>Período</h2>
 
         <div class="form-row">
           <label>Preset:</label>
@@ -70,15 +48,18 @@
         </div>
 
         <div class="form-row">
-          <label>Janela de vínculo (fixa):</label>
-          <input type="text" id="match-window-fixed" readonly>
-          <span class="hint">Definida em core/config.js. Não é editável na UI.</span>
-        </div>
-
-        <div class="form-row">
           <label>Chunk (dias):</label>
           <input type="number" id="chunk-days" min="1" max="31" value="7">
           <span class="hint">Roda em blocos para evitar timeout.</span>
+        </div>
+
+        <!-- Only for Activities tab -->
+        <div class="form-row" id="row-only-missing" style="display:none;">
+          <label>
+            <input type="checkbox" id="only-missing-activity" checked>
+            Somente SPAs sem Activity
+          </label>
+          <span class="hint">Recomendado para rodar várias vezes sem retrabalho.</span>
         </div>
 
         <div class="form-row actions">
@@ -92,12 +73,12 @@
       <section class="panel">
         <h3>Status</h3>
         <div class="stats-grid">
-          <div class="stat"><div class="k" id="st-k1">Total</div><div class="v" id="st-v1">0</div></div>
-          <div class="stat"><div class="k" id="st-k2">Criados</div><div class="v" id="st-v2">0</div></div>
-          <div class="stat"><div class="k" id="st-k3">Atualizados</div><div class="v" id="st-v3">0</div></div>
-          <div class="stat"><div class="k" id="st-k4">Sem vínculo</div><div class="v" id="st-v4">0</div></div>
-          <div class="stat"><div class="k" id="st-k5">Ambíguos</div><div class="v" id="st-v5">0</div></div>
-          <div class="stat"><div class="k" id="st-k6">Erros</div><div class="v" id="st-v6">0</div></div>
+          <div class="stat"><div class="k">Itens</div><div class="v" id="st-total">0</div></div>
+          <div class="stat"><div class="k">Criados</div><div class="v" id="st-created">0</div></div>
+          <div class="stat"><div class="k">Atualizados</div><div class="v" id="st-updated">0</div></div>
+          <div class="stat"><div class="k">Sem match</div><div class="v" id="st-noact">0</div></div>
+          <div class="stat"><div class="k">Ambíguos</div><div class="v" id="st-amb">0</div></div>
+          <div class="stat"><div class="k">Erros</div><div class="v" id="st-errors">0</div></div>
         </div>
 
         <div class="progress">

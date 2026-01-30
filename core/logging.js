@@ -1,7 +1,6 @@
 (function (global) {
   const App = global.App = global.App || {};
   App.state = App.state || {};
-
   App.state.logs = App.state.logs || [];
 
   function ts() {
@@ -24,7 +23,7 @@
   function push(level, msg, meta) {
     const line = fmt(level, msg, meta);
     App.state.logs.push(line);
-    if (App.state.logs.length > 6000) App.state.logs.shift();
+    if (App.state.logs.length > 8000) App.state.logs.shift();
     console.log(line);
     try {
       const el = document.getElementById('log-view');
@@ -53,7 +52,7 @@
       filename: ev && ev.filename ? ev.filename : null,
       lineno: ev && ev.lineno ? ev.lineno : null,
       colno: ev && ev.colno ? ev.colno : null,
-      stack: ev && ev.error && ev.error.stack ? String(ev.error.stack).slice(0, 2500) : null
+      stack: ev && ev.error && ev.error.stack ? String(ev.error.stack).slice(0, 2000) : null
     };
     App.log.error("JS_ERROR", payload);
   });
@@ -62,7 +61,7 @@
     let reason = ev && ev.reason ? ev.reason : "unknown";
     const payload = {
       reason: (reason && reason.message) ? reason.message : String(reason),
-      stack: reason && reason.stack ? String(reason.stack).slice(0, 2500) : null
+      stack: reason && reason.stack ? String(reason.stack).slice(0, 2000) : null
     };
     App.log.error("UNHANDLED_REJECTION", payload);
   });

@@ -27,15 +27,15 @@
   // Debug
   App.config.DEBUG_VERIFY_SAVE = true;
 
-  // ✅ JANELA FIXA (não é input do usuário)
-  App.config.MATCH_WINDOW_MIN_FIXED = 3;   // <<<<<<<<<<<<<<<< ajuste aqui se precisar
-  App.config.MATCH_MAX_CANDIDATES_LOG = 5;
+  // ⚠️ Janela FIXA (não editável pelo usuário)
+  // Use o mesmo padrão da app antiga: poucos minutos, constante.
+  App.config.MATCH_WINDOW_MIN = 3; // ajuste aqui se quiser 2
 
-  // Chunk defaults (UI inicia com 7, mas você pode forçar aqui se quiser)
-  App.config.DEFAULT_CHUNK_DAYS = 7;
-
-  // Disposition parsing
+  // Opcional (mantive)
+  App.config.WRITE_DISPOSITION_TO_ACTIVITY = true;
   App.config.ACTIVITY_RESULT_PREFIX = "[DISPOSITION]";
+  App.config.ACTIVITY_PREPEND_TO_DESCRIPTION = false;
+
   App.config.DISPOSITIONS = [
     "REUNIÃO AGENDADA",
     "FALEI COM SECRETÁRIA",
@@ -49,8 +49,4 @@
     "CHAMADA PERDIDA",
     "NÚMERO INCORRETO"
   ];
-
-  // Se um dia vocês quiserem voltar a “carimbar” disposition na Activity:
-  App.config.WRITE_DISPOSITION_TO_ACTIVITY = false;
-  App.config.ACTIVITY_PREPEND_TO_DESCRIPTION = false;
 })(window);

@@ -3,32 +3,29 @@
   const log = App.log;
   const refs = App.ui.refs;
 
+  App.state = App.state || {};
+  App.state.ui = App.state.ui || { activeTab: "vox" };
+
   function toggleCustom() {
     refs.customRangeBox.style.display = (refs.presetSel.value === 'custom') ? 'flex' : 'none';
   }
 
-  function setActiveTab(which) {
-    const isVox = which === 'vox';
-    refs.tabVox.classList.toggle('active', isVox);
-    refs.tabAct.classList.toggle('active', !isVox);
-    refs.tabBodyVox.classList.toggle('hidden', !isVox);
-    refs.tabBodyAct.classList.toggle('hidden', isVox);
+  function setTab(tab) {
+    App.state.ui.activeTab = tab;
 
-    App.state.mode = isVox ? 'VOX_TO_SPA' : 'ACTIVITY_TO_SPA';
+    refs.tabVox.classList.toggle("active", tab === "vox");
+    refs.tabAct.classList.toggle("active", tab === "act");
 
-    // Ajusta labels do status para o modo
-    App.svc.BackfillRunner?.configureUiForMode?.(App.state.mode);
+    // somente na aba 2
+    refs.rowOnlyMissing.style.display = (tab === "act") ? "flex" : "none";
   }
+
+  refs.tabVox.addEventListener("click", () => setTab("vox"));
+  refs.tabAct.addEventListener("click", () => setTab("act"));
+  setTab("vox");
 
   refs.presetSel.addEventListener('change', toggleCustom);
   toggleCustom();
-
-  refs.tabVox.addEventListener('click', () => setActiveTab('vox'));
-  refs.tabAct.addEventListener('click', () => setActiveTab('act'));
-
-  // Default
-  App.state.mode = 'VOX_TO_SPA';
-  setActiveTab('vox');
 
   refs.btnCopyLog.addEventListener('click', async function () {
     try {
