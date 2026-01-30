@@ -4,9 +4,7 @@
   const log = App.log;
 
   const ENTITY_TYPE_ID = parseInt(App.config.ENTITY_TYPE_ID, 10);
-  const F = App.config.FIELD_CODES; // ufCrm.. reais
-
-  // ✅ Debug/validação pós-save
+  const F = App.config.FIELD_CODES;
   const DEBUG_VERIFY_SAVE = !!App.config.DEBUG_VERIFY_SAVE;
 
   function assertEntityType() {
@@ -21,18 +19,17 @@
   function stripDiacritics(s) {
     return String(s || "")
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, ""); // remove acentos
+      .replace(/[\u0300-\u036f]/g, "");
   }
 
-  // ✅ norm robusto: remove acentos, padroniza espaços e símbolos
   function norm(s) {
     return stripDiacritics(String(s || ""))
       .trim()
       .toUpperCase()
-      .replace(/[\s\-]+/g, "_")          // espaços e hífen -> _
-      .replace(/[^\w]/g, "_")           // outros símbolos -> _
-      .replace(/_+/g, "_")              // colapsa ___
-      .replace(/^_+|_+$/g, "");         // trim _
+      .replace(/[\s\-]+/g, "_")
+      .replace(/[^\w]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "");
   }
 
   function extractItemsFromRes(res) {
@@ -40,17 +37,20 @@
     return BX.extractItemsFromData(data);
   }
 
-  // ===== Fields meta (somente para enums) =====
   let _fieldsMeta = null;
-  let _enumCache = null; // { callDirection: Map(label->id), disposition: Map(label->id) }
+  let _enumCache = null;
 
   async function loadFieldsMeta() {
     assertEntityType();
     if (_fieldsMeta) return _fieldsMeta;
 
-    const res = await BX.callMethodWithTimeout("crm.item.fields", { entityTypeId: ENTITY_TYPE_ID });
-    const data = (typeof res.data === "function") ? res.data() : res.data;
+    const res = await BX.callMethodWithTimeout(
+      "crm.item.fields",
+      { entityTypeId: ENTITY_TYPE_ID },
+      120000
+    );
 
+    const data = (typeof res.data === "function") ? res.data() : res.data;
     if (!data || !data.fields) {
       throw new Error("crm.item.fields não retornou fields. Verifique permissões e o ENTITY_TYPE_ID.");
     }
@@ -68,7 +68,7 @@
     function buildEnumMap(realFieldKey) {
       const m = new Map();
       const f = meta.fields ? meta.fields[realFieldKey] : null;
-      const items = f && Array.isArray(f.items) ? f.items : [];
+      const items = (f && Array.isArray(f.items)) ? f.items : [];
 
       for (const it of items) {
         const rawValue = (it.value ?? it.VALUE ?? it.name ?? it.NAME ?? "");
@@ -77,10 +77,11 @@
         const k = norm(rawValue);
         const v = String(rawId);
 
-        if (!k || !v || v === "undefined") continue;
+        if (!k) continue;
+        if (!v || v === "undefined" || v === "null") continue;
+
         m.set(k, v);
       }
-
       return m;
     }
 
@@ -99,7 +100,6 @@
     return _enumCache;
   }
 
-  // ===== Dedup: por DEDUP_KEY =====
   function toIntIdMaybe(v) {
     const n = parseInt(String(v || ""), 10);
     return Number.isFinite(n) ? n : null;
@@ -111,15 +111,18 @@
     const filter = {};
     filter[F.DEDUP_KEY] = String(callId);
 
-    const res = await BX.callMethodWithTimeout("crm.item.list", {
-      entityTypeId: ENTITY_TYPE_ID,
-      filter,
-      select: ["id", F.DEDUP_KEY, F.TELEPHONY_CALL_ID],
-      order: { id: "ASC" }
-    });
+    const res = await BX.callMethodWithTimeout(
+      "crm.item.list",
+      {
+        entityTypeId: ENTITY_TYPE_ID,
+        filter,
+        select: ["id", F.DEDUP_KEY, F.TELEPHONY_CALL_ID, F.CRM_ACTIVITY_ID],
+        order: { id: "ASC" }
+      },
+      120000
+    );
 
     const items = extractItemsFromRes(res);
-
     if (!items || !items.length) return null;
 
     if (items.length > 1) {
@@ -130,29 +133,22 @@
     }
 
     const row = items[0];
-
     const id =
       toIntIdMaybe(row.id) ??
       toIntIdMaybe(row.ID) ??
       toIntIdMaybe(row.Id) ??
       (row.item ? (toIntIdMaybe(row.item.id) ?? toIntIdMaybe(row.item.ID)) : null);
 
-    if (!id) {
-      log?.error?.("DEDUP retornou item sem id. Verifique o retorno do crm.item.list (select/format).", {
-        keys: Object.keys(row || {}),
-        row
-      });
-      return null; // força CREATE (evita update com id inválido)
-    }
-
+    if (!id) return null;
     return { ...row, __intId: id };
   }
 
   async function addItem(fields) {
-    const res = await BX.callMethodWithTimeout("crm.item.add", {
-      entityTypeId: ENTITY_TYPE_ID,
-      fields
-    });
+    const res = await BX.callMethodWithTimeout(
+      "crm.item.add",
+      { entityTypeId: ENTITY_TYPE_ID, fields },
+      120000
+    );
     const d = (typeof res.data === "function") ? res.data() : res.data;
     return d && d.item ? d.item : d;
   }
@@ -161,24 +157,24 @@
     const intId = toIntIdMaybe(id);
     if (!intId) throw new Error(`ID inválido para update: ${id}`);
 
-    const res = await BX.callMethodWithTimeout("crm.item.update", {
-      entityTypeId: ENTITY_TYPE_ID,
-      id: intId,
-      fields
-    });
+    const res = await BX.callMethodWithTimeout(
+      "crm.item.update",
+      { entityTypeId: ENTITY_TYPE_ID, id: intId, fields },
+      120000
+    );
     const d = (typeof res.data === "function") ? res.data() : res.data;
     return d && d.item ? d.item : d;
   }
 
-  // ✅ Verificação pós-gravação (prova do que persistiu)
   async function getItem(id) {
     const intId = toIntIdMaybe(id);
     if (!intId) return null;
 
-    const res = await BX.callMethodWithTimeout("crm.item.get", {
-      entityTypeId: ENTITY_TYPE_ID,
-      id: intId
-    });
+    const res = await BX.callMethodWithTimeout(
+      "crm.item.get",
+      { entityTypeId: ENTITY_TYPE_ID, id: intId },
+      120000
+    );
 
     const d = (typeof res.data === "function") ? res.data() : res.data;
     if (d && d.item) return d.item;
@@ -192,38 +188,29 @@
     );
   }
 
-  async function verifySaved(itemId, callId) {
+  async function verifySaved(itemId, extra) {
     if (!DEBUG_VERIFY_SAVE) return;
-
     try {
       const saved = await getItem(itemId);
-      if (!saved) {
-        log?.warn?.("VERIFY_SAVE: item.get não retornou item", { itemId, callId });
-        return;
-      }
+      if (!saved) return;
 
       const sid = getAnyIdFromItem(saved, itemId);
-
       log?.info?.("VERIFY_SAVE", {
         id: sid,
-        callId: String(callId || ""),
-        dir: saved[F.CALL_DIRECTION],
+        callId: saved[F.TELEPHONY_CALL_ID],
         act: saved[F.CRM_ACTIVITY_ID],
         disp: saved[F.DISPOSITION],
         dispRawLen: saved[F.DISPOSITION_RAW] ? String(saved[F.DISPOSITION_RAW]).length : 0,
-        answered: saved[F.ANSWERED],
-        phone: saved[F.PHONE_NUMBER]
+        extra: extra || null
       });
     } catch (e) {
       log?.warn?.("VERIFY_SAVE falhou", {
         itemId,
-        callId,
         err: (e && e.message) ? e.message : String(e || "")
       });
     }
   }
 
-  // ===== user name (cache) =====
   const _userNameCache = new Map();
 
   async function getUserNameById(userId) {
@@ -232,7 +219,7 @@
     if (_userNameCache.has(uid)) return _userNameCache.get(uid);
 
     try {
-      const res = await BX.callMethodWithTimeout("user.get", { ID: uid });
+      const res = await BX.callMethodWithTimeout("user.get", { ID: uid }, 60000);
       const d = (typeof res.data === "function") ? res.data() : res.data;
       const u = Array.isArray(d) ? d[0] : null;
       const name = u ? ((u.NAME || "") + " " + (u.LAST_NAME || "")).trim() : "";
@@ -244,7 +231,6 @@
     }
   }
 
-  // ===== Mapeamentos =====
   function answeredFromCall(call) {
     const dur = parseInt(call?.CALL_DURATION, 10);
     return Number.isFinite(dur) && dur > 0;
@@ -274,6 +260,21 @@
     return call?.CALL_START_DATE || call?.CALL_START_DATE_FORMATTED || call?.CALL_START_DATE_SHORT || null;
   }
 
+  function getDirectionToken(call) {
+    const t = parseInt(call?.CALL_TYPE, 10);
+    if (Number.isFinite(t)) {
+      if (t === 1) return "OUTBOUND";
+      if (t === 2) return "INBOUND";
+      if (t === 3) return "INBOUND_REDIRECTED";
+    }
+
+    const s = String(call?.DIRECTION || call?.CALL_DIRECTION || call?.CALL_TYPE || "").trim().toUpperCase();
+    if (s.includes("OUT")) return "OUTBOUND";
+    if (s.includes("REDIRECT")) return "INBOUND_REDIRECTED";
+    if (s.includes("IN")) return "INBOUND";
+    return null;
+  }
+
   function pickEnumIdByContains(enumMap, preferredTokens) {
     const keys = Array.from(enumMap.keys());
     for (const token of preferredTokens) {
@@ -284,40 +285,21 @@
     return null;
   }
 
-  // ✅ Direção resiliente: tenta CALL_TYPE e variações
-  function getDirectionToken(call) {
-    // 1) padrão voximplant
-    const t = parseInt(call?.CALL_TYPE, 10);
-    if (Number.isFinite(t)) {
-      if (t === 1) return "OUTBOUND";
-      if (t === 2) return "INBOUND";
-      if (t === 3) return "INBOUND_REDIRECTED";
-    }
-
-    // 2) alguns retornos/integrações podem ter string
-    const s =
-      String(call?.DIRECTION || call?.CALL_DIRECTION || call?.CALL_TYPE || "").trim().toUpperCase();
-
-    if (s.includes("OUT")) return "OUTBOUND";
-    if (s.includes("REDIRECT")) return "INBOUND_REDIRECTED";
-    if (s.includes("IN")) return "INBOUND";
-
-    return null;
-  }
-
   function pickDirectionEnumId(call, enums) {
     const token = getDirectionToken(call);
     if (!token) return null;
 
-    // bate por igualdade exata primeiro
     const exact = enums.callDirection.get(norm(token));
     if (exact) return exact;
 
-    // fallback por contains
     return pickEnumIdByContains(enums.callDirection, [token]);
   }
 
-  async function upsertFromCall(call, resolved) {
+  /**
+   * ✅ MODO 1: Vox → SPA
+   * NÃO salva activity/disposition aqui.
+   */
+  async function upsertFromVoxCall(call) {
     await loadEnums();
     const enums = _enumCache;
 
@@ -325,7 +307,6 @@
     if (!callId) throw new Error("CALL sem CALL_ID/ID");
 
     const existing = await findByDedupKey(callId);
-
     const fields = {};
 
     // IDs/dedup
@@ -338,15 +319,14 @@
       fields[F.USER_ID] = uid;
 
       const directName = String(call?.PORTAL_USER_NAME || "").trim();
-      if (directName) {
-        fields[F.USER_NAME] = directName;
-      } else {
+      if (directName) fields[F.USER_NAME] = directName;
+      else {
         const nm = await getUserNameById(uid);
         if (nm) fields[F.USER_NAME] = nm;
       }
     }
 
-    // Direção (lista)
+    // Direção (enum)
     const dirEnumId = pickDirectionEnumId(call, enums);
     if (dirEnumId) fields[F.CALL_DIRECTION] = dirEnumId;
 
@@ -360,16 +340,136 @@
     fields[F.CALL_DURATION] = safeDuration(call);
     fields[F.ANSWERED] = answeredFromCall(call) ? "Y" : "N";
 
-    // Activity + Disposition
-    if (resolved?.activityId) {
-      fields[F.CRM_ACTIVITY_ID] = String(resolved.activityId);
+    // timestamps
+    const now = BX.nowIso();
+    fields[F.SYNCED_AT] = now;
+    fields[F.UPDATED_AT] = now;
+    if (!existing) fields[F.CREATED_AT] = now;
+
+    log?.info?.("SPA_UPSERT_VOX_PRE", {
+      callId,
+      hasExisting: !!existing,
+      callType: call?.CALL_TYPE,
+      dirToken: getDirectionToken(call),
+      dirEnumId: dirEnumId || null
+    });
+
+    if (!existing) {
+      const item = await addItem(fields);
+      const newId = getAnyIdFromItem(item, null);
+      await verifySaved(newId, { mode: "created_vox" });
+      return { mode: "created", id: newId, callId };
     }
 
+    const exId = existing.__intId;
+    const item = await updateItem(exId, fields);
+    const updId = getAnyIdFromItem(item, exId);
+
+    await verifySaved(updId, { mode: "updated_vox" });
+    return { mode: "updated", id: updId, callId };
+  }
+
+  /**
+   * Lista SPAs por período, com opção de filtrar apenas sem Activity.
+   */
+  async function listSpasByPeriod(dateFromIso, dateToIso, onlyMissingActivity) {
+    assertEntityType();
+
+    const filter = {
+      ">= " + F.CALL_START_DT: BX.isoToSpace(dateFromIso),
+      "<= " + F.CALL_START_DT: BX.isoToSpace(dateToIso)
+    };
+
+    // Bitrix filter key precisa ser sem espaços: ">=uf..." etc.
+    const realFilter = {};
+    realFilter[">=" + F.CALL_START_DT] = BX.isoToSpace(dateFromIso);
+    realFilter["<=" + F.CALL_START_DT] = BX.isoToSpace(dateToIso);
+
+    if (onlyMissingActivity) {
+      // vazio / null
+      realFilter["=" + F.CRM_ACTIVITY_ID] = false;
+    }
+
+    const select = [
+      "id",
+      F.TELEPHONY_CALL_ID,
+      F.CRM_ACTIVITY_ID,
+      F.USER_ID,
+      F.CALL_START_DT,
+      F.PHONE_NUMBER,
+      F.CALL_DIRECTION,
+      F.DISPOSITION,
+      F.DISPOSITION_RAW,
+      F.ENTITY_TYPE,
+      F.ENTITY_ID
+    ];
+
+    const rows = await BX.listAll(
+      "crm.item.list",
+      {
+        entityTypeId: ENTITY_TYPE_ID,
+        filter: realFilter,
+        select,
+        order: { id: "ASC" }
+      },
+      { timeoutPerPageMs: 120000, maxTotalMs: 900000, pageDelayMs: 150, maxRetries: 3 }
+    );
+
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  function mapSpaRowForMatching(row, activityProvider) {
+    // extrair token de direção a partir do enum id do SPA:
+    // Como o enum id -> token não está mapeado, não dá para “converter” com 100% certeza aqui.
+    // Então: para o matching, direção fica UNKNOWN (não filtramos no SPA->Activity),
+    // ou você pode enriquecer com regra própria se quiser.
+    // (A parte que realmente salva direção já está correta no Vox.)
+    return {
+      id: toIntIdMaybe(row.id ?? row.ID ?? row.Id),
+      callId: safeStr(row[F.TELEPHONY_CALL_ID] || ""),
+      existingActivityId: safeStr(row[F.CRM_ACTIVITY_ID] || ""),
+      userId: safeStr(row[F.USER_ID] || ""),
+      callStartDt: safeStr(row[F.CALL_START_DT] || ""),
+      phone: safeStr(row[F.PHONE_NUMBER] || ""),
+      callDirToken: "UNKNOWN"
+    };
+  }
+
+  /**
+   * Atualiza campos de Activity/Disposition/Entity no SPA.
+   * Idempotente: só escreve se mudou ou se está vazio, a menos que forceRelink.
+   */
+  async function updateSpaFromResolvedActivity(spaId, resolved, opts) {
+    await loadEnums();
+    const enums = _enumCache;
+
+    const forceRelink = !!(opts && opts.forceRelink);
+
+    if (!spaId) throw new Error("updateSpaFromResolvedActivity: spaId inválido");
+
+    const fields = {};
+    const now = BX.nowIso();
+    fields[F.SYNCED_AT] = now;
+    fields[F.UPDATED_AT] = now;
+
+    // Activity link
+    if (resolved?.activityId) {
+      fields[F.CRM_ACTIVITY_ID] = String(resolved.activityId);
+    } else if (!forceRelink) {
+      // sem activity -> não atualiza nada além de timestamps
+      // mas ainda atualiza SYNCED/UPDATED pra marcar passagem
+    }
+
+    // Entity
+    if (resolved?.entityType) fields[F.ENTITY_TYPE] = String(resolved.entityType);
+    if (resolved?.entityId) fields[F.ENTITY_ID] = String(resolved.entityId);
+
+    // Disposition raw
     if (resolved?.dispositionRaw) {
       fields[F.DISPOSITION_RAW] = String(resolved.dispositionRaw).slice(0, 5000);
     }
 
-    // DISPOSITION (lista)
+    // Disposition enum
     let dispEnumId = null;
     const dispLabel = resolved?.disposition ? String(resolved.disposition) : "";
     if (dispLabel) {
@@ -378,49 +478,20 @@
     }
     if (dispEnumId) fields[F.DISPOSITION] = dispEnumId;
 
-    // Entity link
-    if (resolved?.entityType) fields[F.ENTITY_TYPE] = String(resolved.entityType);
-    if (resolved?.entityId) fields[F.ENTITY_ID] = String(resolved.entityId);
-
-    // timestamps
-    const now = BX.nowIso();
-    fields[F.SYNCED_AT] = now;
-    fields[F.UPDATED_AT] = now;
-    if (!existing) fields[F.CREATED_AT] = now;
-
-    // 🔎 LOG “prova” antes de salvar (mostra se você está mandando valor ou não)
-    log?.info?.("SPA_UPSERT_PRE", {
-      callId,
-      hasExisting: !!existing,
-      callType: call?.CALL_TYPE,
-      dirToken: getDirectionToken(call),
-      dirEnumId: dirEnumId || null,
+    log?.info?.("SPA_UPDATE_ACTIVITY_PRE", {
+      spaId,
+      activityId: resolved?.activityId || null,
       dispLabel: dispLabel || null,
       dispEnumId: dispEnumId || null,
-      activityId: resolved?.activityId || null
+      entityType: resolved?.entityType || null,
+      entityId: resolved?.entityId || null
     });
 
-    if (!existing) {
-      const item = await addItem(fields);
-      const newId = getAnyIdFromItem(item, null);
+    const item = await updateItem(spaId, fields);
+    const updId = getAnyIdFromItem(item, spaId);
+    await verifySaved(updId, { mode: "update_activity" });
 
-      await verifySaved(newId, callId);
-
-      return { mode: "created", id: newId };
-    }
-
-    // Update conservador
-    const updateFields = { ...fields };
-    if (!dispEnumId) delete updateFields[F.DISPOSITION];
-    if (!resolved?.activityId) delete updateFields[F.CRM_ACTIVITY_ID];
-
-    const exId = existing.__intId;
-    const item = await updateItem(exId, updateFields);
-    const updId = getAnyIdFromItem(item, exId);
-
-    await verifySaved(updId, callId);
-
-    return { mode: "updated", id: updId };
+    return { ok: true, id: updId };
   }
 
   async function sanityCheck() {
@@ -433,6 +504,9 @@
   App.svc.SpaProvider = {
     sanityCheck,
     loadEnums,
-    upsertFromCall
+    upsertFromVoxCall,
+    listSpasByPeriod,
+    mapSpaRowForMatching,
+    updateSpaFromResolvedActivity
   };
 })(window);

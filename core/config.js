@@ -27,14 +27,15 @@
   // Debug
   App.config.DEBUG_VERIFY_SAVE = true;
 
-  // ✅ NOVO: controla gravação no Activity
-  App.config.WRITE_DISPOSITION_TO_ACTIVITY = true;
+  // ✅ JANELA FIXA (não é input do usuário)
+  App.config.MATCH_WINDOW_MIN_FIXED = 3;   // <<<<<<<<<<<<<<<< ajuste aqui se precisar
+  App.config.MATCH_MAX_CANDIDATES_LOG = 5;
+
+  // Chunk defaults (UI inicia com 7, mas você pode forçar aqui se quiser)
+  App.config.DEFAULT_CHUNK_DAYS = 7;
+
+  // Disposition parsing
   App.config.ACTIVITY_RESULT_PREFIX = "[DISPOSITION]";
-  App.config.ACTIVITY_PREPEND_TO_DESCRIPTION = false; // se true, prefixa no DESCRIPTION também
-
-  // ✅ NOVO: tenta colar CRM_ACTIVITY_ID no telephony (quando suportado)
-  App.config.TELEPHONY_TRY_ATTACH_ACTIVITY = true;
-
   App.config.DISPOSITIONS = [
     "REUNIÃO AGENDADA",
     "FALEI COM SECRETÁRIA",
@@ -48,4 +49,8 @@
     "CHAMADA PERDIDA",
     "NÚMERO INCORRETO"
   ];
+
+  // Se um dia vocês quiserem voltar a “carimbar” disposition na Activity:
+  App.config.WRITE_DISPOSITION_TO_ACTIVITY = false;
+  App.config.ACTIVITY_PREPEND_TO_DESCRIPTION = false;
 })(window);

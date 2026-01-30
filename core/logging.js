@@ -24,7 +24,7 @@
   function push(level, msg, meta) {
     const line = fmt(level, msg, meta);
     App.state.logs.push(line);
-    if (App.state.logs.length > 5000) App.state.logs.shift();
+    if (App.state.logs.length > 6000) App.state.logs.shift();
     console.log(line);
     try {
       const el = document.getElementById('log-view');
@@ -40,7 +40,11 @@
     warn: (m, meta) => push("WARN", m, meta),
     error: (m, meta) => push("ERROR", m, meta),
     debug: (m, meta) => push("DEBUG", m, meta),
-    clear: () => { App.state.logs = []; const el = document.getElementById('log-view'); if (el) el.textContent = ""; }
+    clear: () => {
+      App.state.logs = [];
+      const el = document.getElementById('log-view');
+      if (el) el.textContent = "";
+    }
   };
 
   window.addEventListener('error', function (ev) {
@@ -49,7 +53,7 @@
       filename: ev && ev.filename ? ev.filename : null,
       lineno: ev && ev.lineno ? ev.lineno : null,
       colno: ev && ev.colno ? ev.colno : null,
-      stack: ev && ev.error && ev.error.stack ? String(ev.error.stack).slice(0, 2000) : null
+      stack: ev && ev.error && ev.error.stack ? String(ev.error.stack).slice(0, 2500) : null
     };
     App.log.error("JS_ERROR", payload);
   });
@@ -58,7 +62,7 @@
     let reason = ev && ev.reason ? ev.reason : "unknown";
     const payload = {
       reason: (reason && reason.message) ? reason.message : String(reason),
-      stack: reason && reason.stack ? String(reason.stack).slice(0, 2000) : null
+      stack: reason && reason.stack ? String(reason.stack).slice(0, 2500) : null
     };
     App.log.error("UNHANDLED_REJECTION", payload);
   });

@@ -43,3 +43,23 @@ body { margin:0; font-family: Arial, sans-serif; background:#f3f6fb; }
   background:#0f172a; color:#d7e3ff; border-radius:10px; padding:12px;
   height:300px; overflow:auto; font-size:12px; line-height:1.35;
 }
+
+.sep { border:0; border-top:1px solid #eef2f9; margin:12px 0; }
+
+.tabs { display:flex; gap:8px; margin:8px 0 12px; }
+.tab {
+  border:1px solid #dde6f5;
+  background:#f6f8fc;
+  padding:8px 10px;
+  border-radius:10px;
+  cursor:pointer;
+  font-weight:700;
+  font-size:13px;
+}
+.tab.active {
+  background:#2e8ef6;
+  border-color:#2e8ef6;
+  color:#fff;
+}
+.tab-body .desc { color:#445; font-size:13px; margin-bottom:8px; }
+.hidden { display:none; }

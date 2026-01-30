@@ -4,10 +4,20 @@
 
   function callMethod(method, params) {
     return new Promise((resolve, reject) => {
-      BX24.callMethod(method, params || {}, function (res) {
-        if (res.error && res.error()) return reject(new Error(res.error()));
-        resolve(res);
-      });
+      try {
+        BX24.callMethod(method, params || {}, function (res) {
+          try {
+            if (res && res.error && res.error()) {
+              return reject(new Error(res.error()));
+            }
+            resolve(res);
+          } catch (cbErr) {
+            reject(cbErr);
+          }
+        });
+      } catch (syncErr) {
+        reject(syncErr);
+      }
     });
   }
 
@@ -15,7 +25,13 @@
 
   function isTimeoutErr(e) {
     const m = (e && e.message) ? e.message : String(e || "");
-    return m === "TIMEOUT";
+    if (!m) return false;
+    if (m === "TIMEOUT") return true;
+    if (m.startsWith("TIMEOUT_CALLMETHOD:")) return true;
+    if (m.toUpperCase().includes("TIMEOUT")) return true;
+    if (m.includes("504")) return true;
+    if (m.includes("Gateway Timeout")) return true;
+    return false;
   }
 
   async function callMethodWithTimeout(method, params, timeoutMs = 60000) {
@@ -26,12 +42,14 @@
       )
     ]);
   }
+
   function extractItemsFromData(data) {
     if (!data) return [];
     if (Array.isArray(data)) return data;
     if (data.items && Array.isArray(data.items)) return data.items;
     if (data.result && Array.isArray(data.result)) return data.result;
     if (data.result && data.result.items && Array.isArray(data.result.items)) return data.result.items;
+    if (data.result && data.result.result && Array.isArray(data.result.result)) return data.result.result;
     return [];
   }
 
@@ -57,10 +75,14 @@
   }
 
   async function listAll(method, params, opts) {
-    const timeoutPerPageMs = (opts && opts.timeoutPerPageMs) || 120000;
-    const maxTotalMs       = (opts && opts.maxTotalMs) || 900000;
-    const pageDelayMs      = (opts && opts.pageDelayMs) || 150;
-    const maxRetries       = (opts && opts.maxRetries) || 3;
+    let timeoutPerPageMs = (opts && opts.timeoutPerPageMs) || 120000;
+    const maxTotalMs     = (opts && opts.maxTotalMs) || 900000;
+    const pageDelayMs    = (opts && opts.pageDelayMs) || 150;
+    const maxRetries     = (opts && opts.maxRetries) || 3;
+
+    if (String(method).startsWith("voximplant.") && timeoutPerPageMs < 180000) {
+      timeoutPerPageMs = 180000;
+    }
 
     const started = Date.now();
     const out = [];
@@ -75,16 +97,19 @@
       while (true) {
         try {
           const pageParams = Object.assign({}, params || {}, { start });
-          res = await callWithTimeout(method, pageParams, timeoutPerPageMs);
+          res = await callMethodWithTimeout(method, pageParams, timeoutPerPageMs);
           break;
         } catch (e) {
           if (isTimeoutErr(e) && attempt < maxRetries) {
             attempt++;
             log?.warn?.("TIMEOUT_PAGE_RETRY", { method, start, attempt, timeoutPerPageMs });
-            await sleep(400 * attempt);
+            await sleep(500 * attempt);
             continue;
           }
-          throw e;
+          const msg = (e && e.message) ? e.message : String(e || "");
+          const err = new Error(msg);
+          err.meta = { method, start, attempt, timeoutPerPageMs };
+          throw err;
         }
       }
 

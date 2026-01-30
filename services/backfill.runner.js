@@ -14,8 +14,8 @@
   if (!Activity || typeof Activity.getActivities !== "function") {
     throw new Error("ActivityProvider não carregou (App.svc.ActivityProvider.getActivities ausente).");
   }
-  if (!SPA || typeof SPA.upsertFromCall !== "function") {
-    throw new Error("SpaProvider não carregou (App.svc.SpaProvider.upsertFromCall ausente).");
+  if (!SPA || typeof SPA.upsertFromVoxCall !== "function") {
+    throw new Error("SpaProvider não carregou (App.svc.SpaProvider.upsertFromVoxCall ausente).");
   }
 
   App.state = App.state || {};
@@ -26,9 +26,9 @@
     refs.btnStop.disabled = !running;
   }
 
-  function setStat(id, val) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = String(val);
+  function setStat(kEl, vEl, label, val) {
+    if (kEl) kEl.textContent = label;
+    if (vEl) vEl.textContent = String(val);
   }
 
   function setProgress(pct, meta) {
@@ -64,22 +64,223 @@
     return BX.isoLocalStartEndFromDates(df, dt);
   }
 
+  function configureUiForMode(mode) {
+    // Reset labels/values
+    setProgress(0, "Aguardando...");
+
+    if (mode === "VOX_TO_SPA") {
+      setStat(refs.stK1, refs.stV1, "Chamadas", 0);
+      setStat(refs.stK2, refs.stV2, "Criados", 0);
+      setStat(refs.stK3, refs.stV3, "Atualizados", 0);
+      setStat(refs.stK4, refs.stV4, "—", 0);
+      setStat(refs.stK5, refs.stV5, "—", 0);
+      setStat(refs.stK6, refs.stV6, "Erros", 0);
+      return;
+    }
+
+    // ACTIVITY_TO_SPA
+    setStat(refs.stK1, refs.stV1, "SPAs", 0);
+    setStat(refs.stK2, refs.stV2, "Vinculados", 0);
+    setStat(refs.stK3, refs.stV3, "Já tinham vínculo", 0);
+    setStat(refs.stK4, refs.stV4, "Sem match", 0);
+    setStat(refs.stK5, refs.stV5, "Ambíguos", 0);
+    setStat(refs.stK6, refs.stV6, "Erros", 0);
+  }
+
+  async function runVoxToSpa(range, chunkDays) {
+    const counters = { total: 0, done: 0, created: 0, updated: 0, errors: 0 };
+
+    const chunks = BX.splitIntoChunks(range.dateFromIso, range.dateToIso, chunkDays);
+    log.info(`(Modo 1) Vox → SPA | chunks=${chunks.length} chunkDays=${chunkDays}`);
+
+    for (let ci = 0; ci < chunks.length; ci++) {
+      if (App.state.backfill.canceled) throw new Error("CANCELED");
+
+      const ch = chunks[ci];
+      setProgress(
+        Math.round((ci / Math.max(1, chunks.length)) * 100),
+        `Chunk ${ci + 1}/${chunks.length} | carregando Vox...`
+      );
+
+      const calls = await Telephony.getCalls(ch.dateFrom, ch.dateTo);
+      counters.total += calls.length;
+
+      setStat(refs.stK1, refs.stV1, "Chamadas", counters.total);
+      setStat(refs.stK2, refs.stV2, "Criados", counters.created);
+      setStat(refs.stK3, refs.stV3, "Atualizados", counters.updated);
+      setStat(refs.stK6, refs.stV6, "Erros", counters.errors);
+
+      if (!calls.length) {
+        log.info(`Chunk ${ci + 1}/${chunks.length}: calls=0`);
+        continue;
+      }
+
+      for (let i = 0; i < calls.length; i++) {
+        if (App.state.backfill.canceled) throw new Error("CANCELED");
+
+        const c = calls[i];
+        const callId = String(c.CALL_ID || c.ID || "");
+
+        try {
+          const r = await SPA.upsertFromVoxCall(c);
+          if (r.mode === "created") counters.created++;
+          else if (r.mode === "updated") counters.updated++;
+        } catch (e) {
+          counters.errors++;
+          log.error(`Falha Vox→SPA call=${callId}`, {
+            msg: (e && e.message) ? e.message : String(e),
+            stack: e && e.stack ? String(e.stack).slice(0, 1200) : null
+          });
+        }
+
+        counters.done++;
+        if (i % 10 === 0 || i === calls.length - 1) {
+          setStat(refs.stK2, refs.stV2, "Criados", counters.created);
+          setStat(refs.stK3, refs.stV3, "Atualizados", counters.updated);
+          setStat(refs.stK6, refs.stV6, "Erros", counters.errors);
+
+          const pct = Math.round((counters.done / Math.max(1, counters.total)) * 100);
+          setProgress(pct, `Processando ${counters.done}/${counters.total} (chunk ${ci + 1}/${chunks.length})`);
+        }
+
+        if (i % 25 === 0) await new Promise(r => setTimeout(r, 30));
+      }
+
+      log.info(`Chunk ${ci + 1} concluído.`);
+    }
+
+    return counters;
+  }
+
+  async function runActivityToSpa(range, chunkDays, opts) {
+    const counters = { total: 0, linked: 0, already: 0, nomatch: 0, amb: 0, errors: 0 };
+
+    const chunks = BX.splitIntoChunks(range.dateFromIso, range.dateToIso, chunkDays);
+    const windowMin = parseInt(App.config.MATCH_WINDOW_MIN_FIXED, 10) || 3;
+    const windowMs = Math.max(60_000, windowMin * 60_000);
+
+    log.info(`(Modo 2) Activity → SPA | chunks=${chunks.length} chunkDays=${chunkDays} windowMin(fixo)=${windowMin}`);
+
+    for (let ci = 0; ci < chunks.length; ci++) {
+      if (App.state.backfill.canceled) throw new Error("CANCELED");
+
+      const ch = chunks[ci];
+
+      setProgress(
+        Math.round((ci / Math.max(1, chunks.length)) * 100),
+        `Chunk ${ci + 1}/${chunks.length} | carregando SPAs...`
+      );
+
+      const spaRowsRaw = await SPA.listSpasByPeriod(
+        ch.dateFrom,
+        ch.dateTo,
+        !!opts.onlyMissingActivity && !opts.forceRelink
+      );
+
+      const spaRows = spaRowsRaw
+        .map(r => SPA.mapSpaRowForMatching(r, Activity))
+        .filter(x => x && x.id);
+
+      counters.total += spaRows.length;
+      setStat(refs.stK1, refs.stV1, "SPAs", counters.total);
+
+      if (!spaRows.length) {
+        log.info(`Chunk ${ci + 1}/${chunks.length}: spas=0`);
+        continue;
+      }
+
+      // quais responsáveis existem nessas SPAs?
+      const respIds = Array.from(new Set(spaRows.map(s => String(s.userId || "").trim()).filter(Boolean)));
+
+      // janela do chunk com padding
+      function shiftIso(iso, minutes) {
+        const d = new Date(iso);
+        d.setMinutes(d.getMinutes() + minutes);
+        return BX.nowIsoFromDate(d);
+      }
+
+      const pad = Math.max(2, windowMin);
+      const actFrom = shiftIso(ch.dateFrom, -pad);
+      const actTo   = shiftIso(ch.dateTo, +pad);
+
+      setProgress(
+        Math.round((ci / Math.max(1, chunks.length)) * 100),
+        `Chunk ${ci + 1}/${chunks.length} | carregando Activities...`
+      );
+
+      const acts = await Activity.getActivities(actFrom, actTo, respIds);
+      const actByResp = Activity.indexActivitiesByResponsible(acts);
+
+      log.info(`Chunk ${ci + 1}/${chunks.length}: spas=${spaRows.length}, activities=${acts.length}`);
+
+      for (let i = 0; i < spaRows.length; i++) {
+        if (App.state.backfill.canceled) throw new Error("CANCELED");
+
+        const s = spaRows[i];
+
+        const hasAct = !!String(s.existingActivityId || "").trim();
+
+        // se não for force relink e já tem vínculo -> contabiliza e pula
+        if (hasAct && !opts.forceRelink) {
+          counters.already++;
+          continue;
+        }
+
+        const resolved = Activity.resolveForSpaRow(s, actByResp, windowMs);
+
+        if (resolved.ambiguity) {
+          counters.amb++;
+          log.warn(`AMBIGUOUS spa=${s.id}`, { candidates: resolved.candidates || [] });
+        }
+
+        if (!resolved.activityId) {
+          counters.nomatch++;
+          continue;
+        }
+
+        try {
+          await SPA.updateSpaFromResolvedActivity(s.id, resolved, { forceRelink: opts.forceRelink });
+          counters.linked++;
+        } catch (e) {
+          counters.errors++;
+          log.error(`Falha Activity→SPA spa=${s.id}`, {
+            msg: (e && e.message) ? e.message : String(e),
+            stack: e && e.stack ? String(e.stack).slice(0, 1200) : null
+          });
+        }
+
+        if (i % 10 === 0 || i === spaRows.length - 1) {
+          setStat(refs.stK2, refs.stV2, "Vinculados", counters.linked);
+          setStat(refs.stK3, refs.stV3, "Já tinham vínculo", counters.already);
+          setStat(refs.stK4, refs.stV4, "Sem match", counters.nomatch);
+          setStat(refs.stK5, refs.stV5, "Ambíguos", counters.amb);
+          setStat(refs.stK6, refs.stV6, "Erros", counters.errors);
+
+          const processed = (counters.linked + counters.already + counters.nomatch + counters.errors);
+          const pct = Math.round((processed / Math.max(1, counters.total)) * 100);
+          setProgress(pct, `Processando ${processed}/${counters.total} (chunk ${ci + 1}/${chunks.length})`);
+        }
+
+        if (i % 25 === 0) await new Promise(r => setTimeout(r, 30));
+      }
+
+      log.info(`Chunk ${ci + 1} concluído.`);
+    }
+
+    return counters;
+  }
+
   async function start() {
     App.state.backfill.running = true;
     App.state.backfill.canceled = false;
     setButtons(true);
 
-    const counters = { total: 0, done: 0, created: 0, updated: 0, noact: 0, amb: 0, errors: 0 };
-
-    setStat("st-total", 0);
-    setStat("st-created", 0);
-    setStat("st-updated", 0);
-    setStat("st-noact", 0);
-    setStat("st-amb", 0);
-    setStat("st-errors", 0);
-    setProgress(0, "Preparando...");
-
     try {
+      const mode = App.state.mode || "VOX_TO_SPA";
+
+      configureUiForMode(mode);
+      setProgress(0, "Preparando...");
+
       await SPA.loadEnums();
 
       const range = computeRangeFromUi();
@@ -89,119 +290,32 @@
         return;
       }
 
-      const chunkDays = parseInt(refs.chunkDays.value, 10) || 7;
-      const windowMin = parseInt(refs.matchWindowMin.value, 10) || 10;
+      const chunkDays = parseInt(refs.chunkDays.value, 10) || (App.config.DEFAULT_CHUNK_DAYS || 7);
 
-      const chunks = BX.splitIntoChunks(range.dateFromIso, range.dateToIso, chunkDays);
-      log.info(`Executando ${chunks.length} chunk(s), chunkDays=${chunkDays}, windowMin=${windowMin}`);
+      log.info("Iniciando execução", { mode, range, chunkDays });
 
-      setProgress(0, "Iniciando...");
+      let counters = null;
 
-      for (let ci = 0; ci < chunks.length; ci++) {
-        if (App.state.backfill.canceled) throw new Error("CANCELED");
-
-        const ch = chunks[ci];
-
-        setProgress(
-          Math.round((ci / Math.max(1, chunks.length)) * 100),
-          `Chunk ${ci + 1}/${chunks.length} preparando...`
-        );
-
-        const calls = await Telephony.getCalls(ch.dateFrom, ch.dateTo);
-        counters.total += calls.length;
-        setStat("st-total", counters.total);
-
-        if (!calls.length) {
-          log.info(`Chunk ${ci + 1}/${chunks.length}: calls=0 (pulando activities)`);
-          log.info(`Chunk ${ci + 1} concluído.`);
-          continue;
-        }
-
-        const respIds = Array.from(new Set(
-          calls.map(c => c.PORTAL_USER_ID ? String(c.PORTAL_USER_ID) : null).filter(Boolean)
-        ));
-
-        function shiftIso(iso, minutes) {
-          const d = new Date(iso);
-          d.setMinutes(d.getMinutes() + minutes);
-          return BX.nowIsoFromDate(d);
-        }
-
-        const windowMs = Math.max(60_000, windowMin * 60_000);
-        const windowMinPad = Math.ceil(windowMs / 60000);
-
-        const actFrom = shiftIso(ch.dateFrom, -windowMinPad);
-        const actTo   = shiftIso(ch.dateTo, +windowMinPad);
-
-        const acts = await Activity.getActivities(actFrom, actTo, respIds);
-        const actIndex = Activity.indexActivities(acts);
-
-        log.info(`Chunk ${ci + 1}/${chunks.length}: calls=${calls.length}, activities=${acts.length}`);
-
-        for (let i = 0; i < calls.length; i++) {
-          if (App.state.backfill.canceled) throw new Error("CANCELED");
-
-          const c = calls[i];
-          const callId = String(c.CALL_ID || c.ID || "");
-          const resolved = Activity.resolveForCall(c, actIndex, windowMs);
-
-          if (resolved && resolved.ambiguity) {
-            counters.amb++;
-            log.warn(`AMBIGUOUS call=${callId}`, resolved.candidates || {});
-          }
-          if (!(resolved && resolved.activityId)) {
-            counters.noact++;
-          }
-
-          try {
-            // ✅ 1) tenta “colar” activity no telephony (quando suportado)
-            if (resolved?.activityId) {
-              await Telephony.tryAttachActivity(callId, resolved.activityId);
-            }
-
-            // ✅ 2) grava disposition no Activity (RESULT)
-            if (resolved?.activityId && resolved?.disposition) {
-              await Activity.tryWriteDispositionToActivity(resolved.activityId, resolved.disposition);
-            }
-
-            // ✅ 3) upsert no SPA (como vocês já faziam)
-            const r = await SPA.upsertFromCall(c, resolved);
-            if (r.mode === "created") counters.created++;
-            else if (r.mode === "updated") counters.updated++;
-
-          } catch (e) {
-            counters.errors++;
-            log.error(`Falha upsert call=${callId}`, {
-              msg: (e && e.message) ? e.message : String(e),
-              stack: e && e.stack ? String(e.stack).slice(0, 1200) : null
-            });
-          }
-
-          counters.done++;
-
-          if (i % 5 === 0 || i === calls.length - 1) {
-            setStat("st-created", counters.created);
-            setStat("st-updated", counters.updated);
-            setStat("st-noact", counters.noact);
-            setStat("st-amb", counters.amb);
-            setStat("st-errors", counters.errors);
-
-            const pct = Math.round((counters.done / Math.max(1, counters.total)) * 100);
-            setProgress(pct, `Processando ${counters.done}/${counters.total} (chunk ${ci + 1}/${chunks.length})`);
-          }
-
-          if (i % 25 === 0) await new Promise(r => setTimeout(r, 50));
-        }
-
-        log.info(`Chunk ${ci + 1} concluído.`);
+      if (mode === "VOX_TO_SPA") {
+        counters = await runVoxToSpa(range, chunkDays);
+        setProgress(100, "✅ Concluído (Vox → SPA).");
+        log.info("✅ TAREFA CONCLUÍDA (Modo 1)", counters);
+        alert(`✅ Concluído (Vox → SPA)\n\nChamadas: ${counters.total}\nCriados: ${counters.created}\nAtualizados: ${counters.updated}\nErros: ${counters.errors}`);
+        return;
       }
 
-      setProgress(100, "✅ Concluído.");
-      log.info("✅ TAREFA CONCLUÍDA", counters);
+      const opts = {
+        onlyMissingActivity: !!refs.actOnlyMissing?.checked,
+        forceRelink: !!refs.actForceRelink?.checked
+      };
 
+      counters = await runActivityToSpa(range, chunkDays, opts);
+      setProgress(100, "✅ Concluído (Activity → SPA).");
+      log.info("✅ TAREFA CONCLUÍDA (Modo 2)", counters);
       alert(
-        `✅ Concluído!\n\nChamadas: ${counters.total}\nCriados: ${counters.created}\nAtualizados: ${counters.updated}\nSem activity: ${counters.noact}\nAmbíguos: ${counters.amb}\nErros: ${counters.errors}`
+        `✅ Concluído (Activity → SPA)\n\nSPAs: ${counters.total}\nVinculados: ${counters.linked}\nJá tinham vínculo: ${counters.already}\nSem match: ${counters.nomatch}\nAmbíguos: ${counters.amb}\nErros: ${counters.errors}`
       );
+
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
       if (msg === "CANCELED") {
@@ -230,5 +344,5 @@
     start();
   }
 
-  App.svc.BackfillRunner = { startFromUi, stop };
+  App.svc.BackfillRunner = { startFromUi, stop, configureUiForMode };
 })(window);
