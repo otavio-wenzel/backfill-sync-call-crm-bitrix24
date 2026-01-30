@@ -19,7 +19,6 @@
       log.warn("Falha ao obter usuário atual", String(e));
     }
 
-    // Sanity check do SPA (entityTypeId + fields)
     try {
       const etid = parseInt(App.config.ENTITY_TYPE_ID, 10);
       if (!etid || Number.isNaN(etid)) throw new Error("ENTITY_TYPE_ID inválido no config.js");
@@ -38,7 +37,9 @@
 
     log.info("CONFIG CHECK (raw)", {
       ENTITY_TYPE_ID: App.config.ENTITY_TYPE_ID,
-      FIELD_CODES: App.config.FIELD_CODES ? Object.keys(App.config.FIELD_CODES).length : 0
+      FIELD_CODES: App.config.FIELD_CODES ? Object.keys(App.config.FIELD_CODES).length : 0,
+      WRITE_DISPOSITION_TO_ACTIVITY: !!App.config.WRITE_DISPOSITION_TO_ACTIVITY,
+      TELEPHONY_TRY_ATTACH_ACTIVITY: !!App.config.TELEPHONY_TRY_ATTACH_ACTIVITY
     });
 
     log.info("Pronto para iniciar backfill.");

@@ -43,7 +43,6 @@
     clear: () => { App.state.logs = []; const el = document.getElementById('log-view'); if (el) el.textContent = ""; }
   };
 
-  // ERROS JS (tenta capturar arquivo/linha/coluna/stack)
   window.addEventListener('error', function (ev) {
     const payload = {
       message: ev && ev.message ? ev.message : "unknown",
@@ -55,7 +54,6 @@
     App.log.error("JS_ERROR", payload);
   });
 
-  // PROMISE REJEITADA (muito comum em async/await)
   window.addEventListener('unhandledrejection', function (ev) {
     let reason = ev && ev.reason ? ev.reason : "unknown";
     const payload = {

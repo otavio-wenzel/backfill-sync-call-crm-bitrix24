@@ -94,6 +94,7 @@
       "CREATED",
       "LAST_UPDATED",
       "DESCRIPTION",
+      "RESULT",
       "OWNER_TYPE_ID",
       "OWNER_ID",
       "ASSOCIATED_ENTITY_ID",
@@ -128,7 +129,8 @@
         direction: directionFromActivity(a),
         ownerType: safeStr(a.OWNER_TYPE_ID),
         ownerId: safeStr(a.OWNER_ID),
-        desc: safeStr(a.DESCRIPTION)
+        desc: safeStr(a.DESCRIPTION),
+        result: safeStr(a.RESULT)
       };
 
       const key = `${resp}|${phone}`;
@@ -182,7 +184,53 @@
     };
   }
 
-  App.svc.ActivityProvider = { getActivities, indexActivities, resolveForCall };
+  /**
+   * ✅ Grava disposition no CRM Activity (RESULT e opcionalmente DESCRIPTION)
+   */
+  async function tryWriteDispositionToActivity(activityId, dispositionLabel) {
+    if (!App.config.WRITE_DISPOSITION_TO_ACTIVITY) return { ok: false, skipped: true };
 
-  log && log.info && log.info("✅ ActivityProvider carregado", { hasGetActivities: true });
+    const aid = String(activityId || "").trim();
+    const disp = String(dispositionLabel || "").trim();
+    if (!aid || !disp) return { ok: false, skipped: true };
+
+    const prefix = App.config.ACTIVITY_RESULT_PREFIX || "[DISPOSITION]";
+    const resultText = `${prefix} ${disp}`;
+
+    // Update mínimo: RESULT
+    try {
+      await BX.callMethod("crm.activity.update", {
+        id: aid,
+        fields: { RESULT: resultText }
+      });
+      log?.info?.("ACTIVITY_DISPOSITION_RESULT_OK", { activityId: aid, result: resultText });
+    } catch (e) {
+      log?.warn?.("ACTIVITY_DISPOSITION_RESULT_FAIL", { activityId: aid, err: e?.message || String(e) });
+      return { ok: false };
+    }
+
+    // Opcional: prefixar description (se vocês quiserem “carimbar”)
+    if (App.config.ACTIVITY_PREPEND_TO_DESCRIPTION) {
+      try {
+        const getRes = await BX.callMethod("crm.activity.get", { id: aid });
+        const d = (typeof getRes.data === "function") ? getRes.data() : getRes.data;
+        const cur = d && d.DESCRIPTION ? String(d.DESCRIPTION) : "";
+        const next = `${resultText}\n${cur || ""}`.slice(0, 10000);
+
+        await BX.callMethod("crm.activity.update", {
+          id: aid,
+          fields: { DESCRIPTION: next }
+        });
+
+        log?.info?.("ACTIVITY_DISPOSITION_DESC_OK", { activityId: aid });
+      } catch (e2) {
+        log?.warn?.("ACTIVITY_DISPOSITION_DESC_FAIL", { activityId: aid, err: e2?.message || String(e2) });
+      }
+    }
+
+    return { ok: true };
+  }
+
+  App.svc.ActivityProvider = { getActivities, indexActivities, resolveForCall, tryWriteDispositionToActivity };
+  log?.info?.("✅ ActivityProvider carregado", { hasGetActivities: true });
 })(window);

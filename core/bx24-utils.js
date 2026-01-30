@@ -18,16 +18,14 @@
     return m === "TIMEOUT";
   }
 
-  async function callWithTimeout(m, p, timeoutMs) {
+  async function callMethodWithTimeout(method, params, timeoutMs = 60000) {
     return await Promise.race([
-      callMethod(m, p),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT")), timeoutMs))
+      callMethod(method, params || {}),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT_CALLMETHOD:" + method)), timeoutMs)
+      )
     ]);
   }
-
-  // Extrai "itens" do padrão Bitrix:
-  // - alguns métodos retornam array direto
-  // - outros retornam objeto {items: [...]}
   function extractItemsFromData(data) {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -37,9 +35,6 @@
     return [];
   }
 
-  // Próxima página:
-  // - se o SDK expõe res.more()/res.next(), usa isso
-  // - senão tenta achar "next" em res.answer / res.answer()
   function extractNext(res) {
     try {
       if (res && typeof res.more === "function" && typeof res.next === "function") {
@@ -56,17 +51,11 @@
 
     if (!ans) return null;
     if (typeof ans.next !== "undefined") return ans.next;
-
-    // universal costuma vir como result.next ou result:{ next, items, total }
     if (ans.result && typeof ans.result.next !== "undefined") return ans.result.next;
-
-    // algumas respostas aninham mais
     if (ans.result && ans.result.result && typeof ans.result.result.next !== "undefined") return ans.result.result.next;
-
     return null;
   }
 
-  // lista paginada usando "start" (offset) + retry/backoff
   async function listAll(method, params, opts) {
     const timeoutPerPageMs = (opts && opts.timeoutPerPageMs) || 120000;
     const maxTotalMs       = (opts && opts.maxTotalMs) || 900000;
@@ -91,7 +80,7 @@
         } catch (e) {
           if (isTimeoutErr(e) && attempt < maxRetries) {
             attempt++;
-            if (log && log.warn) log.warn("TIMEOUT_PAGE_RETRY", { method, start, attempt, timeoutPerPageMs });
+            log?.warn?.("TIMEOUT_PAGE_RETRY", { method, start, attempt, timeoutPerPageMs });
             await sleep(400 * attempt);
             continue;
           }
@@ -180,9 +169,8 @@
   App.core = App.core || {};
   App.core.BX24 = {
     callMethod,
+    callMethodWithTimeout,
     listAll,
-
-    // helpers
     extractItemsFromData,
     isoLocalStartEndFromDates,
     isoToSpace,

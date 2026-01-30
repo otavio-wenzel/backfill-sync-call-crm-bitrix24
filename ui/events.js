@@ -26,10 +26,10 @@
   });
 
   refs.btnStart.addEventListener('click', function () {
-    if (App.svc.BackfillRunner) App.svc.BackfillRunner.startFromUi();
+    App.svc.BackfillRunner?.startFromUi?.();
   });
 
   refs.btnStop.addEventListener('click', function () {
-    if (App.svc.BackfillRunner) App.svc.BackfillRunner.stop();
+    App.svc.BackfillRunner?.stop?.();
   });
 })(window);

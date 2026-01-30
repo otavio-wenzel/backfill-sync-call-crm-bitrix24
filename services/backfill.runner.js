@@ -117,12 +117,10 @@
           continue;
         }
 
-        // responsáveis presentes nas calls do chunk (igual BI trabalha)
         const respIds = Array.from(new Set(
           calls.map(c => c.PORTAL_USER_ID ? String(c.PORTAL_USER_ID) : null).filter(Boolean)
         ));
 
-        // expande range pra não “perder” activity por alguns minutos
         function shiftIso(iso, minutes) {
           const d = new Date(iso);
           d.setMinutes(d.getMinutes() + minutes);
@@ -156,12 +154,27 @@
           }
 
           try {
+            // ✅ 1) tenta “colar” activity no telephony (quando suportado)
+            if (resolved?.activityId) {
+              await Telephony.tryAttachActivity(callId, resolved.activityId);
+            }
+
+            // ✅ 2) grava disposition no Activity (RESULT)
+            if (resolved?.activityId && resolved?.disposition) {
+              await Activity.tryWriteDispositionToActivity(resolved.activityId, resolved.disposition);
+            }
+
+            // ✅ 3) upsert no SPA (como vocês já faziam)
             const r = await SPA.upsertFromCall(c, resolved);
             if (r.mode === "created") counters.created++;
             else if (r.mode === "updated") counters.updated++;
+
           } catch (e) {
             counters.errors++;
-            log.error(`Falha upsert call=${callId}`, String(e && e.message ? e.message : e));
+            log.error(`Falha upsert call=${callId}`, {
+              msg: (e && e.message) ? e.message : String(e),
+              stack: e && e.stack ? String(e.stack).slice(0, 1200) : null
+            });
           }
 
           counters.done++;

@@ -3,16 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <title>Call Analytics - Unified Backfill</title>
-  <script src="//api.bitrix24.com/api/v1/"></script>
+  <script src="//api.bitrix24.com/api/v1/" crossorigin="anonymous"></script>
   <script>
     (function () {
       function redirectToApp() {
-        var base = window.location.href.split('#')[0]; // NÃO remove query aqui
+        var base = window.location.href.split('#')[0];
         var pathOnly = base.split('?')[0];
         var idx  = pathOnly.lastIndexOf('/');
         var root = pathOnly.substring(0, idx + 1);
 
-        // Cache-bust sempre novo (Bitrix iframe cache é agressivo)
         var v = Date.now();
         window.location.replace(root + 'app/app.html?v=' + v);
       }

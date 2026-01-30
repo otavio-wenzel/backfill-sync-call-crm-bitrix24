@@ -24,8 +24,16 @@
     SYNCED_AT:         "ufCrm12_1769105024"
   };
 
-  // ✅ pode colocar aqui (recomendado)
+  // Debug
   App.config.DEBUG_VERIFY_SAVE = true;
+
+  // ✅ NOVO: controla gravação no Activity
+  App.config.WRITE_DISPOSITION_TO_ACTIVITY = true;
+  App.config.ACTIVITY_RESULT_PREFIX = "[DISPOSITION]";
+  App.config.ACTIVITY_PREPEND_TO_DESCRIPTION = false; // se true, prefixa no DESCRIPTION também
+
+  // ✅ NOVO: tenta colar CRM_ACTIVITY_ID no telephony (quando suportado)
+  App.config.TELEPHONY_TRY_ATTACH_ACTIVITY = true;
 
   App.config.DISPOSITIONS = [
     "REUNIÃO AGENDADA",
